@@ -5,8 +5,9 @@ import logging
 import datetime
 from groq import Groq
 from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes, JobQueue
+from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 from telegram.constants import ChatAction
+import base64
 
 # ============================================================
 # CONFIGURAZIONE
@@ -15,6 +16,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "8906876113:AAEVJ0ZYgCQS7Yq4bR
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "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")
 GIACOMO_CHAT_ID = os.environ.get("GIACOMO_CHAT_ID", "1075363140")
 CANALE_ID = -3762151852
+LINK_VIP = "https://t.me/+0QGldo1oEdhlZDRk"
 
 AUDIO1_PATH = "audio1_trading.mp3"
 AUDIO2_PATH = "audio2_vip.mp3"
@@ -66,8 +68,10 @@ MESSAGGI_US_SESSION = [
 # STATO UTENTI
 # ============================================================
 user_states = {}
-user_last_message_time = {}
 weekly_stats = {"messages": 0, "new_vip": 0}
+bot_paused_global = False
+paused_users = set()
+pending_verification = {}  # user_id -> {name, chat_id, user_name}
 
 # ============================================================
 # SYSTEM PROMPT
@@ -85,42 +89,43 @@ Lavori con il broker PuPrime come introducing broker.
 - Rispondi nella stessa lingua del cliente (italiano, inglese o spagnolo).
 - Non sembrare mai un bot o un'intelligenza artificiale.
 
+=== ANALISI SCREENSHOT ===
+Se ti mandano uno screenshot con un errore o un problema:
+- Descrivi brevemente cosa vedi
+- Dai istruzioni chiare e corte per risolvere
+- Se è un errore MT5: guida passo passo per risolvere
+- Se è un problema PuPrime: spiega come procedere
+- Sii sempre rassicurante
+
 === GESTIONE INDECISI ===
 Se qualcuno dice "ci penso", "non so", "forse", "magari", "non sono sicuro":
-Chiedigi in modo cordiale e amichevole cosa non lo convince e come puoi aiutarlo.
-Esempio: "Dimmi, c'è qualcosa che non ti convince? Magari posso aiutarti"
-Poi in base alla risposta gestisci l'obiezione in modo naturale e rassicurante.
+Chiedigi in modo cordiale cosa non lo convince e come puoi aiutarlo.
 
 === GESTIONE OBIEZIONI ===
-- "Costa troppo" / "non ho soldi" → "Non c'è nessun costo, il VIP è completamente gratuito. Ti basta aprire un conto tramite il mio link"
-- "Non mi fido" → "Capisco, è normale avere dubbi. Puoi vedere i risultati nel canale pubblico ogni giorno, zero obblighi"
-- "Non ho esperienza" → "Perfetto, il VIP è ideale per chi inizia — imparerai capendo come funziona il mercato passo per passo"
-- "Non ho tempo" → "I segnali arrivano già pronti, devi solo seguirli. Ci vogliono 5 minuti al giorno"
+- "Costa troppo" / "non ho soldi" → "Non c'è nessun costo, il VIP è completamente gratuito."
+- "Non mi fido" → "Capisco, puoi vedere i risultati nel canale pubblico ogni giorno, zero obblighi"
+- "Non ho esperienza" → "Perfetto, nel VIP imparerai capendo come funziona il mercato passo per passo"
+- "Non ho tempo" → "I segnali arrivano già pronti, ci vogliono 5 minuti al giorno"
 
 === DOMANDE FREQUENTI ===
-DIFFERENZA VIP VS PUBBLICO: "Nel pubblico mando 1-2 segnali al giorno. Nel VIP ricevi 15-20 segnali su XAU/USD + supporto diretto da me. Ed è tutto gratuito 👆"
-STOP LOSS: "Lo stop loss è il livello dove chiudi il trade in perdita per limitare i danni. Fondamentale, non tradare mai senza."
-TAKE PROFIT: "Il take profit è il livello dove chiudi il trade in profitto. Lo imposti prima di aprire il trade."
-STRATEGIA: "Lavoro sull'oro XAU/USD, seguo l'analisi tecnica e i livelli chiave. Pazienza e gestione del rischio sono tutto."
-PROBLEMI METATRADER 5: "Scarica MT5 dal sito di PuPrime. Nelle impostazioni cerca il server 'PUPrime' e inserisci le credenziali che ti hanno mandato via mail. Dimmi che errore ti dà se non funziona."
-DEPOSITO MINIMO: "Non c'è un minimo, ma consiglio 200-300€ per gestire bene il rischio."
+STOP LOSS: "Lo stop loss è il livello dove chiudi il trade in perdita per limitare i danni. Fondamentale."
+TAKE PROFIT: "Il take profit è il livello dove chiudi il trade in profitto. Lo imposti prima di aprire."
+STRATEGIA: "Lavoro sull'oro XAU/USD, analisi tecnica e livelli chiave. Pazienza e gestione del rischio."
+MT5: "Scarica MT5 dal sito di PuPrime. Cerca il server 'PUPrime' e inserisci le credenziali ricevute via mail."
+DEPOSITO: "Non c'è un minimo, ma consiglio 200-300€ per gestire bene il rischio."
 
 === GUADAGNI ===
 Prima risposta: "Varia molto in base al mercato. Non mi piace parlare di numeri."
 Se insistono: "Mediamente intorno ai 3000€ a settimana, dipende dal periodo."
 
 === PERDITE ===
-"Le perdite fanno parte del trading, anche i migliori le hanno. L'importante è rispettare sempre lo stop loss. Un trade perso non significa nulla sul lungo periodo 💪"
+"Le perdite fanno parte del trading. L'importante è rispettare sempre lo stop loss. Un trade perso non significa nulla sul lungo periodo 💪"
 
 === NON FARE MAI ===
 - Non promettere guadagni garantiti
 - Non rispondere su tasse, leggi, dichiarazioni
 - Non rispondere a domande personali
 - Non scrivere messaggi lunghi
-- Non sembrare un bot
-
-=== MOTTO ===
-Il trading non è un gioco d'azzardo. Ci vuole pazienza, calma e metodo.
 """
 
 # ============================================================
@@ -156,14 +161,14 @@ def contains_keyword(text, keywords):
     return any(k in text_lower for k in keywords)
 
 # ============================================================
-# GROQ
+# GROQ — TESTO
 # ============================================================
 def get_ai_response(user_message, user_name, extra_context=""):
     try:
         client = Groq(api_key=GROQ_API_KEY)
         prompt = SYSTEM_PROMPT
         if extra_context:
-            prompt += f"\n\nCONTESTO EXTRA: {extra_context}"
+            prompt += f"\n\nCONTESTO: {extra_context}"
         chat_completion = client.chat.completions.create(
             messages=[
                 {"role": "system", "content": prompt},
@@ -175,7 +180,39 @@ def get_ai_response(user_message, user_name, extra_context=""):
         )
         return chat_completion.choices[0].message.content.strip()
     except Exception as e:
-        logging.error(f"Errore Groq: {e}")
+        logging.error(f"Errore Groq testo: {e}")
+        return None
+
+# ============================================================
+# GROQ — IMMAGINI
+# ============================================================
+def get_ai_response_image(image_data, user_name):
+    try:
+        client = Groq(api_key=GROQ_API_KEY)
+        image_b64 = base64.b64encode(image_data).decode("utf-8")
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}
+                        },
+                        {
+                            "type": "text",
+                            "text": f"{user_name} ti ha mandato questo screenshot. Analizzalo e aiutalo a risolvere il problema in modo corto e diretto."
+                        }
+                    ]
+                }
+            ],
+            model="meta-llama/llama-4-scout-17b-16e-instruct",
+            max_tokens=300,
+        )
+        return chat_completion.choices[0].message.content.strip()
+    except Exception as e:
+        logging.error(f"Errore Groq immagine: {e}")
         return None
 
 # ============================================================
@@ -194,16 +231,17 @@ async def audio_delay(context, chat_id):
     time.sleep(random.randint(15, 25))
 
 # ============================================================
-# FOLLOW UP AUTOMATICI
+# FOLLOW UP
 # ============================================================
 async def followup_no_risposta(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data
     user_id = job_data["user_id"]
     chat_id = job_data["chat_id"]
-    user_name = job_data["user_name"]
     followup_type = job_data["type"]
-
     current_state = user_states.get(user_id)
+
+    if bot_paused_global or user_id in paused_users:
+        return
 
     if followup_type == "audio1" and current_state == "asked_trading":
         await human_delay(context, chat_id, random.randint(5, 15))
@@ -222,8 +260,11 @@ async def followup_indeciso(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data
     user_id = job_data["user_id"]
     chat_id = job_data["chat_id"]
-
     current_state = user_states.get(user_id)
+
+    if bot_paused_global or user_id in paused_users:
+        return
+
     if current_state == "indeciso":
         await human_delay(context, chat_id, random.randint(5, 15))
         await context.bot.send_message(
@@ -239,7 +280,6 @@ async def manda_buongiorno(context: ContextTypes.DEFAULT_TYPE):
     msg = random.choice(MESSAGGI_BUONGIORNO)
     try:
         await context.bot.send_message(chat_id=CANALE_ID, text=msg)
-        logging.info("Buongiorno mandato al canale")
     except Exception as e:
         logging.error(f"Errore buongiorno: {e}")
 
@@ -247,7 +287,6 @@ async def manda_us_session(context: ContextTypes.DEFAULT_TYPE):
     msg = random.choice(MESSAGGI_US_SESSION)
     try:
         await context.bot.send_message(chat_id=CANALE_ID, text=msg)
-        logging.info("US Session mandato al canale")
     except Exception as e:
         logging.error(f"Errore US session: {e}")
 
@@ -267,6 +306,107 @@ async def manda_report_settimanale(context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Errore report: {e}")
 
 # ============================================================
+# COMANDI GIACOMO
+# ============================================================
+async def cmd_stop(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global bot_paused_global
+    if str(update.effective_user.id) != str(GIACOMO_CHAT_ID):
+        return
+    bot_paused_global = True
+    await update.message.reply_text("⏸ Bot in pausa globale. Scrivi /start per riattivarlo.")
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global bot_paused_global
+    if str(update.effective_user.id) != str(GIACOMO_CHAT_ID):
+        return
+    bot_paused_global = False
+    await update.message.reply_text("▶️ Bot riattivato!")
+
+async def cmd_pausa(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id) != str(GIACOMO_CHAT_ID):
+        return
+    if not context.args:
+        await update.message.reply_text("Usa: /pausa USER_ID")
+        return
+    user_id = int(context.args[0])
+    paused_users.add(user_id)
+    await update.message.reply_text(f"⏸ Bot in pausa per utente {user_id}")
+
+async def cmd_riprendi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id) != str(GIACOMO_CHAT_ID):
+        return
+    if not context.args:
+        await update.message.reply_text("Usa: /riprendi USER_ID")
+        return
+    user_id = int(context.args[0])
+    paused_users.discard(user_id)
+    await update.message.reply_text(f"▶️ Bot riattivato per utente {user_id}")
+
+async def cmd_approva(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id) != str(GIACOMO_CHAT_ID):
+        return
+    if not context.args:
+        await update.message.reply_text("Usa: /approva USER_ID")
+        return
+    user_id = int(context.args[0])
+    if user_id in pending_verification:
+        data = pending_verification[user_id]
+        chat_id = data["chat_id"]
+        user_name = data["user_name"]
+        await human_delay(context, chat_id, random.randint(5, 15))
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=f"Tutto verificato! Benvenuto nel VIP 🎉\n\nEcco il link per accedere: {LINK_VIP}"
+        )
+        del pending_verification[user_id]
+        user_states[user_id] = "vip_member"
+        weekly_stats["new_vip"] += 1
+        await update.message.reply_text(f"✅ {user_name} approvato e link VIP inviato!")
+    else:
+        await update.message.reply_text(f"Utente {user_id} non trovato in lista verifica.")
+
+async def cmd_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if str(update.effective_user.id) != str(GIACOMO_CHAT_ID):
+        return
+    if not pending_verification:
+        await update.message.reply_text("Nessun utente in attesa di verifica.")
+        return
+    msg = "📋 *Utenti in attesa di verifica:*\n\n"
+    for uid, data in pending_verification.items():
+        msg += f"👤 {data['full_name']} — ID: `{uid}`\n"
+        msg += f"📅 {data['date']}\n\n"
+    await update.message.reply_text(msg, parse_mode="Markdown")
+
+# ============================================================
+# HANDLER FOTO
+# ============================================================
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message or message.chat.type != "private":
+        return
+
+    user = message.from_user
+    user_name = user.first_name or "Cliente"
+    user_id = user.id
+    chat_id = message.chat_id
+
+    if bot_paused_global or user_id in paused_users:
+        return
+
+    weekly_stats["messages"] += 1
+
+    photo = message.photo[-1]
+    file = await context.bot.get_file(photo.file_id)
+    image_data = await file.download_as_bytearray()
+
+    await context.bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
+    time.sleep(random.randint(20, 35))
+
+    response = get_ai_response_image(bytes(image_data), user_name)
+    if response:
+        await message.reply_text(response)
+
+# ============================================================
 # HANDLER MESSAGGI
 # ============================================================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -281,6 +421,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     chat_id = message.chat_id
     text = message.text
+
+    if bot_paused_global or user_id in paused_users:
+        return
 
     weekly_stats["messages"] += 1
     logging.info(f"Messaggio da {user_name} ({user_id}): {text}")
@@ -306,7 +449,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         with open(AUDIO1_PATH, "rb") as audio:
             await context.bot.send_voice(chat_id=chat_id, voice=audio)
         user_states[user_id] = "asked_trading"
-        # Follow up dopo 1 ora se non risponde
         context.job_queue.run_once(
             followup_no_risposta,
             3600,
@@ -334,23 +476,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         elif contains_keyword(text, INDECISO_KEYWORDS):
             await human_delay(context, chat_id)
-            response = get_ai_response(text, user_name, "L'utente è indeciso sul VIP. Chiedigli cosa non lo convince in modo cordiale e amichevole.")
+            response = get_ai_response(text, user_name, "L'utente è indeciso sul VIP. Chiedigli cosa non lo convince.")
             if response:
                 await context.bot.send_message(chat_id=chat_id, text=response)
             user_states[user_id] = "indeciso"
-            context.job_queue.run_once(
-                followup_indeciso,
-                86400,
-                data={"user_id": user_id, "chat_id": chat_id}
-            )
+            context.job_queue.run_once(followup_indeciso, 86400, data={"user_id": user_id, "chat_id": chat_id})
             return
         else:
             await human_delay(context, chat_id)
             await context.bot.send_message(chat_id=chat_id, text=TESTO_LINK_VIP)
             user_states[user_id] = "sent_link"
             context.job_queue.run_once(
-                followup_no_risposta,
-                3600,
+                followup_no_risposta, 3600,
                 data={"user_id": user_id, "chat_id": chat_id, "user_name": user_name, "type": "link"}
             )
             return
@@ -367,31 +504,48 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         elif contains_keyword(text, INDECISO_KEYWORDS):
             await human_delay(context, chat_id)
-            response = get_ai_response(text, user_name, "L'utente è indeciso sul VIP. Chiedigli cosa non lo convince in modo cordiale e amichevole.")
+            response = get_ai_response(text, user_name, "L'utente è indeciso sul VIP. Chiedigli cosa non lo convince.")
             if response:
                 await context.bot.send_message(chat_id=chat_id, text=response)
             user_states[user_id] = "indeciso"
-            context.job_queue.run_once(
-                followup_indeciso,
-                86400,
-                data={"user_id": user_id, "chat_id": chat_id}
-            )
+            context.job_queue.run_once(followup_indeciso, 86400, data={"user_id": user_id, "chat_id": chat_id})
             return
         elif contains_keyword(text, FATTO_KEYWORDS):
             await human_delay(context, chat_id)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="Perfetto! Sto controllando tutto su PuPrime, appena verifico ti mando il link per accedere al VIP 🔍"
+                text="Perfetto! Dimmi il tuo nome e cognome così verifico tutto su PuPrime 👇"
             )
-            if GIACOMO_CHAT_ID:
-                await context.bot.send_message(
-                    chat_id=GIACOMO_CHAT_ID,
-                    text=f"✅ *Nuovo iscritto da verificare!*\n\n👤 {user_name} (ID: `{user_id}`)\n\nControlla su PuPrime e manda il link VIP!",
-                    parse_mode="Markdown"
-                )
-            weekly_stats["new_vip"] += 1
-            user_states[user_id] = "waiting_verification"
+            user_states[user_id] = "waiting_name"
             return
+
+    # ---- ASPETTA NOME E COGNOME ----
+    if state == "waiting_name":
+        full_name = text.strip()
+        now = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
+        pending_verification[user_id] = {
+            "chat_id": chat_id,
+            "user_name": user_name,
+            "full_name": full_name,
+            "date": now
+        }
+        await human_delay(context, chat_id)
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Perfetto! Sto controllando tutto su PuPrime, appena verifico ti mando il link per accedere al VIP 🔍"
+        )
+        if GIACOMO_CHAT_ID:
+            await context.bot.send_message(
+                chat_id=GIACOMO_CHAT_ID,
+                text=f"✅ *Account da verificare su PuPrime!*\n\n"
+                     f"👤 Nome: *{full_name}*\n"
+                     f"🆔 ID Telegram: `{user_id}`\n"
+                     f"📅 Data: {now}\n\n"
+                     f"Controlla su PuPrime e scrivi:\n/approva {user_id}",
+                parse_mode="Markdown"
+            )
+        user_states[user_id] = "waiting_verification"
+        return
 
     # ---- DOPO CAMBIO IB ----
     if state == "has_puprime":
@@ -399,22 +553,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await human_delay(context, chat_id)
             await context.bot.send_message(
                 chat_id=chat_id,
-                text="Perfetto! Sto controllando, appena verifico ti mando il link per accedere al VIP 🔍"
+                text="Perfetto! Dimmi il tuo nome e cognome così verifico tutto su PuPrime 👇"
             )
-            if GIACOMO_CHAT_ID:
-                await context.bot.send_message(
-                    chat_id=GIACOMO_CHAT_ID,
-                    text=f"✅ *Cambio IB da verificare!*\n\n👤 {user_name} (ID: `{user_id}`)\n\nControlla su PuPrime e manda il link VIP!",
-                    parse_mode="Markdown"
-                )
-            weekly_stats["new_vip"] += 1
-            user_states[user_id] = "waiting_verification"
+            user_states[user_id] = "waiting_name"
             return
 
-    # ---- INDECISO — GESTIONE OBIEZIONE ----
+    # ---- INDECISO ----
     if state in ["indeciso", "followup_indeciso_sent"]:
         await human_delay(context, chat_id)
-        response = get_ai_response(text, user_name, "L'utente era indeciso sul VIP. Gestisci la sua obiezione in modo cordiale, rassicurante e spingi verso l'iscrizione senza essere aggressivo.")
+        response = get_ai_response(text, user_name, "L'utente era indeciso sul VIP. Gestisci la sua obiezione in modo cordiale e spingi verso l'iscrizione.")
         if response:
             await context.bot.send_message(chat_id=chat_id, text=response)
         return
@@ -435,29 +582,24 @@ def main():
     )
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    # Comandi
+    app.add_handler(CommandHandler("stop", cmd_stop))
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CommandHandler("pausa", cmd_pausa))
+    app.add_handler(CommandHandler("riprendi", cmd_riprendi))
+    app.add_handler(CommandHandler("approva", cmd_approva))
+    app.add_handler(CommandHandler("lista", cmd_lista))
+
+    # Messaggi e foto
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
     # Messaggi automatici canale
     job_queue = app.job_queue
-
-    # Buongiorno ogni giorno alle 8:00 (UTC+2 Italia = 6:00 UTC)
-    job_queue.run_daily(
-        manda_buongiorno,
-        time=datetime.time(hour=6, minute=0, tzinfo=datetime.timezone.utc)
-    )
-
-    # US Session alle 15:30 (UTC+2 = 13:30 UTC)
-    job_queue.run_daily(
-        manda_us_session,
-        time=datetime.time(hour=13, minute=30, tzinfo=datetime.timezone.utc)
-    )
-
-    # Report settimanale ogni lunedì alle 9:00 (7:00 UTC)
-    job_queue.run_daily(
-        manda_report_settimanale,
-        time=datetime.time(hour=7, minute=0, tzinfo=datetime.timezone.utc),
-        days=(0,)  # 0 = lunedì
-    )
+    job_queue.run_daily(manda_buongiorno, time=datetime.time(hour=6, minute=0, tzinfo=datetime.timezone.utc))
+    job_queue.run_daily(manda_us_session, time=datetime.time(hour=13, minute=30, tzinfo=datetime.timezone.utc))
+    job_queue.run_daily(manda_report_settimanale, time=datetime.time(hour=7, minute=0, tzinfo=datetime.timezone.utc), days=(0,))
 
     logging.info("✅ FXJack Bot avviato con tutti i miglioramenti!")
     app.run_polling(drop_pending_updates=True)
