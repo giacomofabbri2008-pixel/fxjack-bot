@@ -85,7 +85,7 @@ Lavori con il broker PuPrime come introducing broker.
 === IL TUO STILE ===
 - Rispondi SEMPRE in modo molto corto e diretto. Mai più di 3-4 righe.
 - Dai del TU a tutti.
-- Usa emoji SOLO nei messaggi cordiali, di congratulazioni o benvenuto.
+- Usa emoji SOLO quando aggiungono qualcosa di vero al messaggio — tipo celebrare un bel profitto o dare energia nel canale. Mai emoji decorative o inutili come lenti, frecce, orologi. Un ragazzo di 18 anni non le usa così.
 - Scrivi in modo naturale, come un ragazzo che risponde dal telefono.
 - Rispondi nella stessa lingua del cliente (italiano, inglese o spagnolo).
 - Non sembrare mai un bot o un'intelligenza artificiale.
@@ -452,7 +452,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---- HA GIA FATTO TUTTO (registrazione + deposito) ----
     if category == "HA_FATTO_REGISTRAZIONE" and state not in ["waiting_name", "waiting_verification", "vip_member"]:
         await human_delay(context, chat_id)
-        msg = "Perfetto! Dimmi il tuo nome e cognome così verifico tutto su PuPrime 👇"
+        msg = "Perfetto! Dimmi il tuo nome e cognome così verifico tutto su PuPrime"
         await context.bot.send_message(chat_id=chat_id, text=msg)
         add_to_history(user_id, "assistant", msg)
         user_states[user_id] = "waiting_name"
@@ -526,7 +526,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "date": now
         }
         await human_delay(context, chat_id)
-        msg = "Perfetto! Sto controllando tutto su PuPrime, appena verifico ti mando il link per accedere al VIP 🔍"
+        msg = "Perfetto! Sto controllando tutto su PuPrime, appena verifico ti mando il link per accedere al VIP"
         await context.bot.send_message(chat_id=chat_id, text=msg)
         add_to_history(user_id, "assistant", msg)
         if GIACOMO_CHAT_ID:
@@ -545,7 +545,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ---- DOPO CAMBIO IB — MANDA SCREEN ----
     if state == "has_puprime":
         await human_delay(context, chat_id)
-        msg = "Perfetto! Dimmi il tuo nome e cognome così verifico tutto su PuPrime 👇"
+        msg = "Perfetto! Dimmi il tuo nome e cognome così verifico tutto su PuPrime"
         await context.bot.send_message(chat_id=chat_id, text=msg)
         add_to_history(user_id, "assistant", msg)
         user_states[user_id] = "waiting_name"
