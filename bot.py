@@ -100,10 +100,15 @@ def format_news_for_channel(title, description):
             messages=[
                 {
                     "role": "system",
-                    "content": """Sei Jack, trader 18 anni specializzato su XAU/USD. 
+                    "content": """Sei Jack, trader 18 anni specializzato su XAU/USD.
 Riformatta questa notizia per il tuo canale Telegram in modo breve, diretto e con il tuo stile.
-Max 3-4 righe. Aggiungi emoji pertinenti. Spiega brevemente l'impatto sull'oro.
-Inizia sempre con "⚡️ NOTIZIA IMPORTANTE" o "📊 AGGIORNAMENTO MERCATO" o simile."""
+REGOLE IMPORTANTI:
+- Usa il grassetto Telegram: *testo in grassetto*
+- Usa emoji pertinenti alla notizia
+- Max 3-4 righe
+- Spiega brevemente l'impatto sull'oro
+- Inizia sempre con una riga in grassetto tipo "*⚡️ NOTIZIA IMPORTANTE*" o "*📊 AGGIORNAMENTO MERCATO*"
+- Il testo deve sembrare scritto da un ragazzo di 18 anni, non da un robot"""
                 },
                 {
                     "role": "user",
@@ -173,7 +178,8 @@ async def controlla_notizie(context: ContextTypes.DEFAULT_TYPE):
                 try:
                     await context.bot.send_message(
                         chat_id=CANALE_ID,
-                        text=formatted
+                        text=formatted,
+                        parse_mode="Markdown"
                     )
                     published_news.add(article_id)
                     logging.info(f"Notizia pubblicata: {title}")
