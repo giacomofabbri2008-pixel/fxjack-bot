@@ -8,6 +8,7 @@ from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters, ContextTypes
 from telegram.constants import ChatAction
 import base64
+import json
 
 # ============================================================
 # CONFIGURAZIONE
@@ -67,139 +68,161 @@ MESSAGGI_US_SESSION = [
 # ============================================================
 # STATO UTENTI
 # ============================================================
+user_conversations = {}
 user_states = {}
-user_conversations = {}  # Storico conversazione per ogni utente
 weekly_stats = {"messages": 0, "new_vip": 0}
 bot_paused_global = False
 paused_users = set()
 pending_verification = {}
 
 # ============================================================
-# SYSTEM PROMPT PRINCIPALE
+# SYSTEM PROMPT — IL CERVELLO DEL BOT
 # ============================================================
-SYSTEM_PROMPT = """
-Sei Jack, un trader di 18 anni con 4 anni di esperienza nel trading, specializzato in XAU/USD (oro).
-Gestisci una community su Telegram chiamata "FX Jack | SEGNALI FREE" e una sala VIP esclusiva.
-Lavori con il broker PuPrime come introducing broker.
+SYSTEM_PROMPT = """Sei Jack, trader di 18 anni con 4 anni di esperienza su XAU/USD (oro).
+Gestisci la community "FX Jack | SEGNALI FREE" su Telegram e una sala VIP esclusiva.
+Lavori con PuPrime come introducing broker — guadagni dalle commissioni dei clienti che operano.
+
+=== IL TUO OBIETTIVO PRINCIPALE ===
+Convertire ogni persona che ti scrive in un iscritto al VIP che deposita e opera su PuPrime tramite il tuo link.
+Ogni conversazione deve portare il cliente verso questo obiettivo, in modo naturale e mai forzato.
 
 === IL TUO STILE ===
-- Rispondi SEMPRE in modo molto corto e diretto. Mai più di 3-4 righe.
-- Dai del TU a tutti.
-- Usa emoji SOLO quando aggiungono qualcosa di vero al messaggio — tipo celebrare un bel profitto o dare energia nel canale. Mai emoji decorative o inutili come lenti, frecce, orologi. Un ragazzo di 18 anni non le usa così.
-- Scrivi in modo naturale, come un ragazzo che risponde dal telefono.
-- Rispondi nella stessa lingua del cliente (italiano, inglese o spagnolo).
-- Non sembrare mai un bot o un'intelligenza artificiale.
-- Leggi sempre il contesto della conversazione prima di rispondere.
+- Sei un ragazzo di 18 anni che scrive dal telefono — naturale, diretto, corto
+- Max 2-3 righe per messaggio, mai di più
+- Dai del TU a tutti
+- Rispondi SEMPRE nella stessa lingua del cliente (italiano, inglese, spagnolo)
+- Emoji solo quando sono naturali — celebrare un profitto, dare energia. Mai emoji decorative
+- Non sembrare mai un bot. Non usare frasi formali o robotiche
+- Leggi SEMPRE tutta la cronologia della chat prima di rispondere
 
-=== ANALISI SCREENSHOT ===
-Se ti mandano uno screenshot con un errore o problema:
-- Analizzalo e dai istruzioni corte e chiare per risolvere
-- Sii sempre rassicurante
+=== MEMORIA E CONTESTO ===
+Ricordi tutto quello che è stato detto nella conversazione.
+Non ripetere mai cose già dette.
+Se il cliente ha già risposto a una domanda, non rigliela.
+Adatta sempre la risposta al punto in cui si trova il cliente nel suo percorso.
 
-=== GESTIONE INDECISI ===
-Se qualcuno dice "ci penso", "non so", "forse", "magari":
-Chiedigi in modo cordiale cosa non lo convince.
+=== IL PERCORSO DI CONVERSIONE ===
+Ogni cliente passa per questi step. Tu sai sempre a che punto è e vai avanti:
 
-=== GESTIONE OBIEZIONI ===
-- "Costa troppo" → "Il VIP è completamente gratuito, ti basta il link"
-- "Non mi fido" → "Puoi vedere i risultati nel canale pubblico ogni giorno, zero obblighi"
-- "Non ho esperienza" → "Perfetto, nel VIP imparerai passo per passo"
-- "Non ho tempo" → "I segnali arrivano già pronti, ci vogliono 5 minuti al giorno"
+STEP 1 — INTERESSE: il cliente chiede del VIP o dei segnali
+→ Rispondi con curiosità, chiedigli da quanto fa trading (per capire il suo livello)
+→ NON mandare link, NON spiegare tutto subito
 
-=== DOMANDE FREQUENTI ===
-STOP LOSS: "Il livello dove chiudi il trade in perdita per limitare i danni. Non tradare mai senza."
-TAKE PROFIT: "Il livello dove chiudi il trade in profitto. Lo imposti prima di aprire."
-STRATEGIA: "Oro XAU/USD, analisi tecnica e livelli chiave. Pazienza e gestione del rischio."
-MT5: "Scarica MT5 dal sito di PuPrime. Cerca server 'PUPrime' e inserisci le credenziali ricevute via mail."
-DEPOSITO: "Non c'è un minimo, ma consiglio 200-300€ per gestire bene il rischio."
+STEP 2 — QUALIFICA: il cliente risponde da quanto fa trading
+→ Mostra entusiasmo, digli che nel VIP migliorerà molto
+→ Chiedigli se ha già PuPrime o no
 
-=== GUADAGNI ===
-Prima risposta: "Varia molto in base al mercato. Non mi piace parlare di numeri."
-Se insistono: "Mediamente intorno ai 3000€ a settimana, dipende dal periodo."
+STEP 3A — NON HA PUPRIME:
+→ Digli che per entrare nel VIP deve aprire un conto PuPrime tramite il tuo link
+→ Usa SEMPRE e SOLO questo testo esatto, non inventare mai link diversi:
+[INVIA_TESTO_VIP]
 
-=== PERDITE ===
-"Le perdite fanno parte del trading. L'importante è rispettare sempre lo stop loss 💪"
+STEP 3B — HA GIÀ PUPRIME:
+→ Digli che deve collegare l'account al tuo codice IB
+→ Usa SEMPRE e SOLO questo testo esatto:
+[INVIA_TESTO_CAMBIO_IB]
 
-=== NON FARE MAI ===
+STEP 4 — HA COMPLETATO LA REGISTRAZIONE (dice "fatto" o simile):
+→ Chiedigli nome e cognome per verificare su PuPrime
+→ Usa esattamente: "Perfetto! Dimmi il tuo nome e cognome così verifico tutto su PuPrime"
+
+STEP 5 — HA DATO NOME E COGNOME:
+→ Digli che stai verificando e lo aggiungi presto
+→ Usa esattamente: "Perfetto! Sto controllando tutto, appena verifico ti mando il link per accedere al VIP"
+→ [NOTIFICA_GIACOMO]
+
+=== GESTIONE CASI SPECIALI ===
+
+SE È INDECISO ("ci penso", "forse", "non so"):
+→ Non spingere, chiedigli cosa non lo convince
+→ Ascolta la risposta e gestisci l'obiezione in modo cordiale
+→ Obiezioni comuni:
+   - "Costa" → "è completamente gratuito, ti basta il link"
+   - "Non mi fido" → "guarda i risultati nel canale pubblico ogni giorno, zero rischi"
+   - "Non ho esperienza" → "perfetto, nel VIP impari passo per passo"
+   - "Non ho tempo" → "i segnali arrivano pronti, 5 minuti al giorno"
+
+SE È ARRABBIATO PER UNA PERDITA:
+→ Cordiale e rassicurante: "Le perdite fanno parte del trading, anche i migliori le hanno. L'importante è lo stop loss — un trade perso non cambia nulla sul lungo periodo"
+
+SE CHIEDE QUANTO GUADAGNI:
+→ Prima risposta: "Varia molto, non mi piace parlare di numeri precisi"
+→ Se insiste: "Mediamente intorno ai 3000€ a settimana, dipende dal periodo"
+
+SE HA PROBLEMI CON MT5:
+→ "Scarica MT5 dal sito di PuPrime, cerca il server PUPrime e inserisci le credenziali ricevute via mail. Dimmi che errore ti dà"
+
+SE CHIEDE STOP LOSS / TAKE PROFIT / STRATEGIA:
+→ Rispondi brevemente e poi riporta la conversazione verso il VIP
+
+=== COSA NON FARE MAI ===
+- Non inventare o modificare link di PuPrime — usa SEMPRE [INVIA_TESTO_VIP] o [INVIA_TESTO_CAMBIO_IB]
 - Non promettere guadagni garantiti
-- Non rispondere su tasse, leggi, dichiarazioni
-- Non rispondere a domande personali
+- Non rispondere su tasse, leggi, dichiarazioni fiscali
+- Non rispondere a domande private su di te (dove vivi, fidanzata, ecc.) → [DOMANDA_PERSONALE]
 - Non scrivere messaggi lunghi
-- Non sembrare un bot
+- Non ripetere cose già dette nella chat
+
+=== FORMATO RISPOSTA ===
+Rispondi SEMPRE con un JSON così:
+{
+  "action": "TEXT" | "AUDIO1" | "AUDIO2" | "AUDIO3" | "TESTO_VIP" | "TESTO_CAMBIO_IB" | "CHIEDI_NOME" | "VERIFICA" | "PERSONALE" | "NOTIFICA_GIACOMO",
+  "text": "il tuo messaggio qui (solo se action è TEXT)",
+  "next_state": "interest" | "qualified" | "sent_link" | "has_puprime" | "waiting_name" | "waiting_verification" | "vip_member" | null
+}
+
+Usa "action: AUDIO1" quando vuoi mandare l'audio "da quanto fai trading"
+Usa "action: AUDIO2" quando vuoi mandare l'audio "benefici VIP"
+Usa "action: AUDIO3" quando vuoi mandare l'audio "cambio IB"
+Usa "action: TESTO_VIP" quando vuoi mandare il testo con il link di iscrizione
+Usa "action: TESTO_CAMBIO_IB" quando vuoi mandare il testo cambio IB
+Usa "action: CHIEDI_NOME" quando devi chiedere nome e cognome
+Usa "action: VERIFICA" quando il cliente ha dato nome e cognome
+Usa "action: PERSONALE" per domande private da ignorare e notificare Giacomo
+Usa "action: TEXT" per qualsiasi altro messaggio testuale
 """
 
 # ============================================================
-# PROMPT CLASSIFICATORE
+# GROQ — CERVELLO PRINCIPALE
 # ============================================================
-CLASSIFIER_PROMPT = """Sei un classificatore. Analizza il messaggio del cliente e la cronologia della conversazione e rispondi con UNA SOLA di queste categorie:
-
-CATEGORIE:
-- VUOLE_VIP: vuole entrare nel VIP, è interessato, chiede come fare
-- HA_FATTO_REGISTRAZIONE: dice di aver fatto la registrazione a PuPrime tramite link, ha depositato, ha completato tutto
-- HA_GIA_PUPRIME: dice di avere già un account PuPrime esistente prima di oggi
-- RISPOSTA_TRADING: sta rispondendo alla domanda "da quanto fai trading"
-- VUOLE_PROCEDERE: dopo aver sentito i benefici del VIP vuole andare avanti
-- INDECISO: non è sicuro, ci deve pensare, forse, magari
-- DATO_NOME: sta fornendo il suo nome e cognome
-- DOMANDA_GENERICA: domanda normale su trading, segnali, ecc.
-- PROBLEMA_TECNICO: ha un problema tecnico con MT5 o PuPrime
-- PERSONALE: domanda personale su Jack (dove vivi, fidanzata, ecc.)
-- NEGATIVO: arrabbiato per perdite
-
-Rispondi con SOLO la categoria, nient'altro."""
-
-def classify_message(text, conversation_history, user_name):
+def get_bot_action(user_message, user_name, conversation_history, user_state):
     try:
         client = Groq(api_key=GROQ_API_KEY)
-        messages = [{"role": "system", "content": CLASSIFIER_PROMPT}]
-        if conversation_history:
-            history_text = "\n".join([f"{m['role']}: {m['content']}" for m in conversation_history[-6:]])
-            messages.append({"role": "user", "content": f"Cronologia conversazione:\n{history_text}\n\nNuovo messaggio di {user_name}: {text}"})
-        else:
-            messages.append({"role": "user", "content": f"Messaggio di {user_name}: {text}"})
+        
+        state_context = f"\nSTATO ATTUALE DEL CLIENTE: {user_state or 'nuovo'}\n" if user_state else ""
+        
+        messages = [{"role": "system", "content": SYSTEM_PROMPT + state_context}]
+        
+        # Aggiungi cronologia
+        for msg in conversation_history[-10:]:
+            messages.append(msg)
+        
+        messages.append({"role": "user", "content": f"{user_name}: {user_message}"})
         
         result = client.chat.completions.create(
             messages=messages,
             model="llama-3.3-70b-versatile",
-            max_tokens=20,
-            temperature=0.1,
+            max_tokens=300,
+            temperature=0.7,
         )
-        category = result.choices[0].message.content.strip().upper()
-        logging.info(f"Classificazione: {category}")
-        return category
+        
+        response_text = result.choices[0].message.content.strip()
+        
+        # Pulisci il JSON
+        if "```json" in response_text:
+            response_text = response_text.split("```json")[1].split("```")[0].strip()
+        elif "```" in response_text:
+            response_text = response_text.split("```")[1].split("```")[0].strip()
+        
+        parsed = json.loads(response_text)
+        return parsed
+        
     except Exception as e:
-        logging.error(f"Errore classificatore: {e}")
-        return "DOMANDA_GENERICA"
+        logging.error(f"Errore get_bot_action: {e}")
+        return {"action": "TEXT", "text": None, "next_state": None}
 
 # ============================================================
-# GROQ — RISPOSTA TESTO
-# ============================================================
-def get_ai_response(user_message, user_name, extra_context="", conversation_history=None):
-    try:
-        client = Groq(api_key=GROQ_API_KEY)
-        prompt = SYSTEM_PROMPT
-        if extra_context:
-            prompt += f"\n\nCONTESTO: {extra_context}"
-        
-        messages = [{"role": "system", "content": prompt}]
-        if conversation_history:
-            for msg in conversation_history[-6:]:
-                messages.append(msg)
-        messages.append({"role": "user", "content": f"Messaggio da {user_name}: {user_message}"})
-        
-        result = client.chat.completions.create(
-            messages=messages,
-            model="llama-3.3-70b-versatile",
-            max_tokens=200,
-            temperature=0.85,
-        )
-        return result.choices[0].message.content.strip()
-    except Exception as e:
-        logging.error(f"Errore Groq: {e}")
-        return None
-
-# ============================================================
-# GROQ — IMMAGINI
+# GROQ — ANALISI IMMAGINI
 # ============================================================
 def get_ai_response_image(image_data, user_name):
     try:
@@ -207,21 +230,21 @@ def get_ai_response_image(image_data, user_name):
         image_b64 = base64.b64encode(image_data).decode("utf-8")
         result = client.chat.completions.create(
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": "Sei Jack, trader 18 anni. Analizza questo screenshot e rispondi in modo corto e diretto per aiutare il cliente a risolvere il problema. Max 3 righe. Parla in modo naturale."},
                 {
                     "role": "user",
                     "content": [
                         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                        {"type": "text", "text": f"{user_name} ti ha mandato questo screenshot. Analizzalo e aiutalo in modo corto e diretto."}
+                        {"type": "text", "text": f"{user_name} ti ha mandato questo screenshot, aiutalo."}
                     ]
                 }
             ],
             model="meta-llama/llama-4-scout-17b-16e-instruct",
-            max_tokens=300,
+            max_tokens=200,
         )
         return result.choices[0].message.content.strip()
     except Exception as e:
-        logging.error(f"Errore Groq immagine: {e}")
+        logging.error(f"Errore immagine: {e}")
         return None
 
 # ============================================================
@@ -253,38 +276,35 @@ async def followup_no_risposta(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data
     user_id = job_data["user_id"]
     chat_id = job_data["chat_id"]
-    followup_type = job_data["type"]
-    current_state = user_states.get(user_id)
+    expected_state = job_data["expected_state"]
 
     if bot_paused_global or user_id in paused_users:
         return
+    if user_states.get(user_id) != expected_state:
+        return
 
-    if followup_type == "audio1" and current_state == "asked_trading":
-        await human_delay(context, chat_id, random.randint(5, 15))
-        msg = "Ehi, magari ci stai ancora pensando. Ti dico solo che è rimasto 1 posto nel VIP, non voglio che te lo perdi"
-        await context.bot.send_message(chat_id=chat_id, text=msg)
-        add_to_history(user_id, "assistant", msg)
-    elif followup_type == "link" and current_state == "sent_link":
-        await human_delay(context, chat_id, random.randint(5, 15))
-        msg = "Ehi, magari ci stai ancora pensando. Ti dico solo che è rimasto 1 posto nel VIP, non voglio che te lo perdi"
-        await context.bot.send_message(chat_id=chat_id, text=msg)
-        add_to_history(user_id, "assistant", msg)
+    await human_delay(context, chat_id, random.randint(5, 15))
+    msg = "Ehi, magari ci stai ancora pensando. Ti dico solo che è rimasto 1 posto nel VIP, non voglio che te lo perdi"
+    await context.bot.send_message(chat_id=chat_id, text=msg)
+    add_to_history(user_id, "assistant", msg)
 
 async def followup_indeciso(context: ContextTypes.DEFAULT_TYPE):
     job_data = context.job.data
     user_id = job_data["user_id"]
     chat_id = job_data["chat_id"]
+
     if bot_paused_global or user_id in paused_users:
         return
-    if user_states.get(user_id) == "indeciso":
-        await human_delay(context, chat_id, random.randint(5, 15))
-        msg = "Tra l'altro oggi abbiamo chiuso ottimi trade sull'oro nel VIP. Se hai ancora dubbi sono qui, dimmi pure"
-        await context.bot.send_message(chat_id=chat_id, text=msg)
-        add_to_history(user_id, "assistant", msg)
-        user_states[user_id] = "followup_indeciso_sent"
+    if user_states.get(user_id) != "indeciso":
+        return
+
+    await human_delay(context, chat_id, random.randint(5, 15))
+    msg = "Tra l'altro oggi abbiamo chiuso ottimi trade sull'oro nel VIP. Se hai ancora dubbi sono qui"
+    await context.bot.send_message(chat_id=chat_id, text=msg)
+    add_to_history(user_id, "assistant", msg)
 
 # ============================================================
-# MESSAGGI CANALE
+# MESSAGGI CANALE AUTOMATICI
 # ============================================================
 async def manda_buongiorno(context: ContextTypes.DEFAULT_TYPE):
     try:
@@ -362,23 +382,23 @@ async def cmd_approva(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id = data["chat_id"]
         user_name = data["user_name"]
         await human_delay(context, chat_id, random.randint(5, 15))
-        msg = f"Tutto verificato! Benvenuto nel VIP 🎉\n\nEcco il link per accedere: {LINK_VIP}"
+        msg = f"Tutto verificato! Benvenuto nel VIP 🎉\n\nEcco il link: {LINK_VIP}"
         await context.bot.send_message(chat_id=chat_id, text=msg)
         add_to_history(user_id, "assistant", msg)
         del pending_verification[user_id]
         user_states[user_id] = "vip_member"
         weekly_stats["new_vip"] += 1
-        await update.message.reply_text(f"✅ {user_name} approvato e link VIP inviato!")
+        await update.message.reply_text(f"✅ {user_name} approvato!")
     else:
-        await update.message.reply_text(f"Utente {user_id} non trovato in lista verifica.")
+        await update.message.reply_text(f"Utente {user_id} non trovato.")
 
 async def cmd_lista(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if str(update.effective_user.id) != str(GIACOMO_CHAT_ID):
         return
     if not pending_verification:
-        await update.message.reply_text("Nessun utente in attesa di verifica.")
+        await update.message.reply_text("Nessun utente in attesa.")
         return
-    msg = "📋 *Utenti in attesa di verifica:*\n\n"
+    msg = "📋 *In attesa di verifica:*\n\n"
     for uid, data in pending_verification.items():
         msg += f"👤 {data['full_name']} — ID: `{uid}`\n📅 {data['date']}\n\n"
     await update.message.reply_text(msg, parse_mode="Markdown")
@@ -408,7 +428,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         add_to_history(user_id, "assistant", response)
 
 # ============================================================
-# HANDLER MESSAGGI — LOGICA INTELLIGENTE
+# HANDLER MESSAGGI PRINCIPALE
 # ============================================================
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -427,96 +447,82 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     weekly_stats["messages"] += 1
-    logging.info(f"Messaggio da {user_name} ({user_id}): {text}")
+    logging.info(f"[{user_name} | {user_id}]: {text}")
 
     add_to_history(user_id, "user", text)
     history = user_conversations.get(user_id, [])
-    state = user_states.get(user_id, None)
+    state = user_states.get(user_id)
 
-    # Classifica il messaggio con AI
-    category = classify_message(text, history, user_name)
+    # Chiedi al cervello AI cosa fare
+    result = get_bot_action(text, user_name, history[:-1], state)
+    action = result.get("action", "TEXT")
+    response_text = result.get("text")
+    next_state = result.get("next_state")
 
-    # ---- DOMANDA PERSONALE ----
-    if category == "PERSONALE":
+    logging.info(f"Action: {action} | State: {state} -> {next_state}")
+
+    # Aggiorna stato
+    if next_state:
+        user_states[user_id] = next_state
+
+    # ---- ESEGUI L'AZIONE ----
+
+    if action == "PERSONALE":
         if GIACOMO_CHAT_ID:
-            try:
-                await context.bot.send_message(
-                    chat_id=GIACOMO_CHAT_ID,
-                    text=f"⚠️ *Domanda personale*\n\n👤 {user_name} (ID: `{user_id}`)\n💬 \"{text}\"",
-                    parse_mode="Markdown"
-                )
-            except Exception as e:
-                logging.error(f"Errore notifica: {e}")
+            await context.bot.send_message(
+                chat_id=GIACOMO_CHAT_ID,
+                text=f"⚠️ *Domanda personale*\n\n👤 {user_name} (ID: `{user_id}`)\n💬 \"{text}\"",
+                parse_mode="Markdown"
+            )
         return
 
-    # ---- HA GIA FATTO TUTTO (registrazione + deposito) ----
-    if category == "HA_FATTO_REGISTRAZIONE" and state not in ["waiting_name", "waiting_verification", "vip_member"]:
+    elif action == "AUDIO1":
+        await audio_delay(context, chat_id)
+        with open(AUDIO1_PATH, "rb") as audio:
+            await context.bot.send_voice(chat_id=chat_id, voice=audio)
+        add_to_history(user_id, "assistant", "[Audio: da quanto fai trading?]")
+        context.job_queue.run_once(
+            followup_no_risposta, 3600,
+            data={"user_id": user_id, "chat_id": chat_id, "expected_state": next_state or state}
+        )
+
+    elif action == "AUDIO2":
+        await audio_delay(context, chat_id)
+        with open(AUDIO2_PATH, "rb") as audio:
+            await context.bot.send_voice(chat_id=chat_id, voice=audio)
+        add_to_history(user_id, "assistant", "[Audio: benefici VIP]")
+
+    elif action == "AUDIO3":
+        await audio_delay(context, chat_id)
+        with open(AUDIO3_PATH, "rb") as audio:
+            await context.bot.send_voice(chat_id=chat_id, voice=audio)
+        add_to_history(user_id, "assistant", "[Audio: cambio IB]")
+        await human_delay(context, chat_id, 5)
+        await context.bot.send_message(chat_id=chat_id, text=TESTO_CAMBIO_IB)
+        add_to_history(user_id, "assistant", TESTO_CAMBIO_IB)
+
+    elif action == "TESTO_VIP":
+        await human_delay(context, chat_id)
+        await context.bot.send_message(chat_id=chat_id, text=TESTO_LINK_VIP)
+        add_to_history(user_id, "assistant", TESTO_LINK_VIP)
+        context.job_queue.run_once(
+            followup_no_risposta, 3600,
+            data={"user_id": user_id, "chat_id": chat_id, "expected_state": next_state or state}
+        )
+
+    elif action == "TESTO_CAMBIO_IB":
+        await human_delay(context, chat_id)
+        await context.bot.send_message(chat_id=chat_id, text=TESTO_CAMBIO_IB)
+        add_to_history(user_id, "assistant", TESTO_CAMBIO_IB)
+
+    elif action == "CHIEDI_NOME":
         await human_delay(context, chat_id)
         msg = "Perfetto! Dimmi il tuo nome e cognome così verifico tutto su PuPrime"
         await context.bot.send_message(chat_id=chat_id, text=msg)
         add_to_history(user_id, "assistant", msg)
         user_states[user_id] = "waiting_name"
-        return
 
-    # ---- VUOLE ENTRARE NEL VIP ----
-    if category == "VUOLE_VIP" and state is None:
-        await audio_delay(context, chat_id)
-        with open(AUDIO1_PATH, "rb") as audio:
-            await context.bot.send_voice(chat_id=chat_id, voice=audio)
-        add_to_history(user_id, "assistant", "[Audio inviato: da quanto fai trading?]")
-        user_states[user_id] = "asked_trading"
-        context.job_queue.run_once(
-            followup_no_risposta, 3600,
-            data={"user_id": user_id, "chat_id": chat_id, "user_name": user_name, "type": "audio1"}
-        )
-        return
-
-    # ---- HA RISPOSTO A DA QUANTO FAI TRADING ----
-    if category == "RISPOSTA_TRADING" or (state == "asked_trading" and category not in ["VUOLE_VIP", "HA_FATTO_REGISTRAZIONE", "PERSONALE"]):
-        await audio_delay(context, chat_id)
-        with open(AUDIO2_PATH, "rb") as audio:
-            await context.bot.send_voice(chat_id=chat_id, voice=audio)
-        add_to_history(user_id, "assistant", "[Audio inviato: benefici VIP]")
-        user_states[user_id] = "sent_vip_benefits"
-        return
-
-    # ---- HA GIA PUPRIME ----
-    if category == "HA_GIA_PUPRIME" and state not in ["waiting_name", "waiting_verification", "vip_member"]:
-        await audio_delay(context, chat_id)
-        with open(AUDIO3_PATH, "rb") as audio:
-            await context.bot.send_voice(chat_id=chat_id, voice=audio)
-        add_to_history(user_id, "assistant", "[Audio inviato: cambio IB]")
-        await human_delay(context, chat_id, 5)
-        await context.bot.send_message(chat_id=chat_id, text=TESTO_CAMBIO_IB)
-        add_to_history(user_id, "assistant", TESTO_CAMBIO_IB)
-        user_states[user_id] = "has_puprime"
-        return
-
-    # ---- VUOLE PROCEDERE DOPO I BENEFICI ----
-    if category == "VUOLE_PROCEDERE" or (state == "sent_vip_benefits" and category not in ["INDECISO", "HA_GIA_PUPRIME", "PERSONALE"]):
-        await human_delay(context, chat_id)
-        await context.bot.send_message(chat_id=chat_id, text=TESTO_LINK_VIP)
-        add_to_history(user_id, "assistant", TESTO_LINK_VIP)
-        user_states[user_id] = "sent_link"
-        context.job_queue.run_once(
-            followup_no_risposta, 3600,
-            data={"user_id": user_id, "chat_id": chat_id, "user_name": user_name, "type": "link"}
-        )
-        return
-
-    # ---- INDECISO ----
-    if category == "INDECISO":
-        await human_delay(context, chat_id)
-        response = get_ai_response(text, user_name, "L'utente è indeciso. Chiedigli cosa non lo convince in modo cordiale.", history)
-        if response:
-            await context.bot.send_message(chat_id=chat_id, text=response)
-            add_to_history(user_id, "assistant", response)
-        user_states[user_id] = "indeciso"
-        context.job_queue.run_once(followup_indeciso, 86400, data={"user_id": user_id, "chat_id": chat_id})
-        return
-
-    # ---- ASPETTA NOME E COGNOME ----
-    if state == "waiting_name" and category == "DATO_NOME":
+    elif action == "VERIFICA":
         full_name = text.strip()
         now = datetime.datetime.now().strftime("%d/%m/%Y %H:%M")
         pending_verification[user_id] = {
@@ -526,44 +532,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "date": now
         }
         await human_delay(context, chat_id)
-        msg = "Perfetto! Sto controllando tutto su PuPrime, appena verifico ti mando il link per accedere al VIP"
+        msg = "Perfetto! Sto controllando tutto, appena verifico ti mando il link per accedere al VIP"
         await context.bot.send_message(chat_id=chat_id, text=msg)
         add_to_history(user_id, "assistant", msg)
+        user_states[user_id] = "waiting_verification"
         if GIACOMO_CHAT_ID:
             await context.bot.send_message(
                 chat_id=GIACOMO_CHAT_ID,
                 text=f"✅ *Account da verificare su PuPrime!*\n\n"
                      f"👤 Nome: *{full_name}*\n"
                      f"🆔 ID: `{user_id}`\n"
-                     f"📅 Data: {now}\n\n"
-                     f"Controlla su PuPrime e scrivi:\n`/approva {user_id}`",
+                     f"📅 {now}\n\n"
+                     f"Scrivi: `/approva {user_id}`",
                 parse_mode="Markdown"
             )
-        user_states[user_id] = "waiting_verification"
-        return
 
-    # ---- DOPO CAMBIO IB — MANDA SCREEN ----
-    if state == "has_puprime":
+    elif action == "TEXT" and response_text:
         await human_delay(context, chat_id)
-        msg = "Perfetto! Dimmi il tuo nome e cognome così verifico tutto su PuPrime"
-        await context.bot.send_message(chat_id=chat_id, text=msg)
-        add_to_history(user_id, "assistant", msg)
-        user_states[user_id] = "waiting_name"
-        return
-
-    # ---- RISPOSTA GENERICA AI ----
-    await human_delay(context, chat_id)
-    response = get_ai_response(text, user_name, "", history)
-    if response:
-        await message.reply_text(response)
-        add_to_history(user_id, "assistant", response)
+        await message.reply_text(response_text)
+        add_to_history(user_id, "assistant", response_text)
+        # Follow up se indeciso
+        if next_state == "indeciso":
+            context.job_queue.run_once(
+                followup_indeciso, 86400,
+                data={"user_id": user_id, "chat_id": chat_id}
+            )
 
 # ============================================================
 # AVVIO
 # ============================================================
 def main():
     logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        format="%(asctime)s - %(levelname)s - %(message)s",
         level=logging.INFO
     )
     app = Application.builder().token(TELEGRAM_TOKEN).build()
