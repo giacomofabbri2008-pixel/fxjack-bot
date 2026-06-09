@@ -103,6 +103,9 @@ def format_news(title, description):
 - Emoji pertinenti
 - Max 3-4 righe
 - Spiega l'impatto sull'oro
+- Scrivi SEMPRE in italiano
+- Max 2-3 righe, breve e diretto
+- Niente testi lunghi
 - Stile ragazzo 18 anni, non robot"""
                 },
                 {"role": "user", "content": f"Titolo: {title}\nDescrizione: {description}"}
@@ -167,17 +170,6 @@ async def controlla_notizie(context: ContextTypes.DEFAULT_TYPE):
     
     logging.info(f"Notizie pubblicate: {count}")
 
-# Test immediato all'avvio
-async def test_avvio(context: ContextTypes.DEFAULT_TYPE):
-    try:
-        await context.bot.send_message(
-            chat_id=CANALE_ID,
-            text="✅ Bot avviato e operativo!"
-        )
-        logging.info("Messaggio di test inviato al canale")
-    except Exception as e:
-        logging.error(f"Errore test avvio: {e}")
-
 # ============================================================
 # MAIN
 # ============================================================
@@ -189,9 +181,6 @@ def main():
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     job_queue = app.job_queue
-
-    # Test immediato — manda messaggio al canale dopo 10 secondi
-    job_queue.run_once(test_avvio, when=10)
 
     # Buongiorno alle 8:00 Italia (6:00 UTC)
     job_queue.run_daily(
