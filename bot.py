@@ -123,6 +123,10 @@ def format_news(title, description):
 # JOBS
 # ============================================================
 async def manda_buongiorno(context: ContextTypes.DEFAULT_TYPE):
+    # Salta sabato (5) e domenica (6)
+    if datetime.datetime.now().weekday() in [5, 6]:
+        logging.info("Weekend — buongiorno non inviato")
+        return
     try:
         msg = random.choice(MESSAGGI_BUONGIORNO)
         await context.bot.send_message(chat_id=CANALE_ID, text=msg)
@@ -131,6 +135,10 @@ async def manda_buongiorno(context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Errore buongiorno: {e}")
 
 async def manda_us_session(context: ContextTypes.DEFAULT_TYPE):
+    # Salta sabato (5) e domenica (6)
+    if datetime.datetime.now().weekday() in [5, 6]:
+        logging.info("Weekend — US session non inviato")
+        return
     try:
         msg = random.choice(MESSAGGI_US_SESSION)
         await context.bot.send_message(chat_id=CANALE_ID, text=msg)
